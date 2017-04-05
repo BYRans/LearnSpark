@@ -22,6 +22,5 @@ object MonteCarloPi {
     ).reduce((a,b) => a+b)
     val pi: Double = 4.0*circle/square
     println("pi is : " + pi)
-
   }
 }
