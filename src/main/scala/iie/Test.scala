@@ -38,7 +38,7 @@ object Test {
     // 注意这里的join条件本应该写为‘m2a.join(movies, m2a("movie") === movies("movie"), "Left")’，但是这么写会产生4列，所以才使用了Seq的这个方式
     val conPathMA = m2a.join(movies, Seq("movie"), "Left")
     // conPathMA为所有可能用到的MA边，现在从公式的最后一步开始计算，先要计算conPath这些边中A与t相连的边（t为某一个movie，A即为该movie的所有actor）,
-    // 所以接下来计算的就是t的所有actor与conPathMA中actor的交集
+    // 所以接下来计算的就是t的所有actor与conPathMA中actor的交集，得到的就是所有M-A、A-M'边
     val tActors = hc.sql("select distinct actor from rans.m2a where movie = " + "'" + t + "'")
     val conActors = tActors.join(conPathMA, Seq("actor"), "Left")
 
