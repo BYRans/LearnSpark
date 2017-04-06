@@ -40,7 +40,17 @@ object Test {
     // conPathMA为所有可能用到的MA边，现在从公式的最后一步开始计算，先要计算conPath这些边中A与t相连的边（t为某一个movie，A即为该movie的所有actor）,
     // 所以接下来计算的就是t的所有actor与conPathMA中actor的交集，得到的就是所有M-A、A-M'边
     val tActors = hc.sql("select distinct actor from rans.m2a where movie = " + "'" + t + "'")
-    val conActors = tActors.join(conPathMA, Seq("actor"), "Left")
+    val M_A_Mt = tActors.join(conPathMA, Seq("actor"), "Left")
+    // 下面是A-M'边
+    val A_Mt = M_A_Mt.filter(M_A_Mt("movie").equalTo(t))
+    // 下面是M-A边
+    val M_A = M_A_Mt.filter(M_A_Mt("movie").notEqual(t))
+    // ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑ 至此得到的A_Mt为U-M-A-M'路径上的A-M'
+    // 下面计算的是每个movie的出度分之一，即U-M-A-M'路径上，所有M点的出度分之一，目的是为了计算出1/|O(Mi|R2)
+    val m2a_out_degree_1cent = hc.sql("select movie,1.0/count(*) from rans.m2a group by movie")
+    // 下面对U-M-A-M'路径上M-A-M'边集合中的M-A边按M分组，每个组内求权重w的和，再乘以对应M的出度分之一
+    val sum_w = M_A.groupBy(M_A("movie")).sum("weight")
+    val WsResl_MAMt = sum_w.join(m2a_out_degree_1cent,Seq("movie"),"Left").select("")
 
     val WsRel_w_wsrel = u2m.filter(u2m("user").equalTo(s)).select(u2m("weight"))
 
@@ -52,6 +62,9 @@ object Test {
     val hc = new org.apache.spark.sql.hive.HiveContext(sc)
     val u2m = hc.sql("select * from rans.u2m")
     val m2a = hc.sql("select * from rans.m2a")
+    val s = "u1"
+    val t = "m2"
+
     val movies = u2m.filter(u2m("user").equalTo("u1")).select("movie").distinct()
 
     val connectedPathMA = m2a.join(movies, m2a("movie") === movies("movie"), "Left")
