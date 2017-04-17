@@ -18,7 +18,7 @@ object DataPreprocess {
     val urm = sc.textFile("hdfs://m02:8020/user/rans/user_ratedmovies.dat").cache()
     val mas = sc.textFile("hdfs://m02:8020/user/rans/movie_actors.dat").cache()
     processU2M(urm)
-    processMAS(mas)
+    processM2A(mas)
   }
 
   def processU2M(urm: RDD[String]) {
@@ -31,7 +31,7 @@ object DataPreprocess {
     u2m.repartition(1).saveAsTextFile("hdfs://m02:8020/user/rans/u2m")
   }
 
-  def processMAS(mas: RDD[String]) {
+  def processM2A(mas: RDD[String]) {
     var m2a = mas.map(_.split("\t")).filter(_.length >= 4).map(x => x(0) + "\t" + x(1) + "\t" + x(3))
     // 如果已经存在结果目录，则删除
     val outputPath = new Path("hdfs://m02:8020/user/rans/m2a")
