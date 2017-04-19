@@ -7,7 +7,7 @@ import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.sql.functions._
 
 
-object Test {
+object WsRel {
   /** Usage: HdfsTest [file] */
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf().setAppName("JL")
