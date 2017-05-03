@@ -28,7 +28,7 @@ object WsRel {
 
     val Wpi = calcPathWeight(u2m, m2a, m2d, hc)
 
-    // 计算两个路径加权后的值（现在有bug）
+    // 计算两个路径加权后的值
     val result = Wumam * Wpi._1 + Wumdm * Wpi._2
 
   }
