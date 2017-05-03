@@ -1,6 +1,5 @@
 package iie
 
-import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, SQLContext}
 import org.apache.spark.sql.hive.HiveContext
 import org.apache.spark.{SparkConf, SparkContext}
@@ -8,28 +7,29 @@ import org.apache.spark.sql.functions._
 
 
 object WsRel {
-  /** Usage: HdfsTest [file] */
+
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf().setAppName("JL")
     val sc = new SparkContext(conf)
     val hc = new HiveContext(sc)
-    val sqlc = new SQLContext(sc)
+
     val u2m = hc.sql("select * from rans.u2m")
     val m2a = hc.sql("select * from rans.m2a")
 
-    val m2aRdd = sqlc.sql("select * from rans.m2a")
-    val u2mRdd = sqlc.sql("select * from rans.u2m")
+    // U-M-A-M的WsRel
+    val Wumam = calcWsRel("u1", "m2", u2m, m2a, hc)
+    val m2d = hc.sql("select * from rans.m2d")
+    // U-M-D-M的WsRel
+    val Wumdm = calcWsRel("61674", "377", u2m, m2d, hc)
 
-    // u_m.toJavaRDD
+    val Wpi = calcPathWeight(u2m, m2a, m2d, hc)
 
-    val Wus = calc("u1", "m2", u2m, m2a, hc)
-
+    // 计算两个路径加权后的值（现在有bug）
+    //  val result = Wumam*Wpi._1.toDouble + Wumam*Wpi._2.toDouble
 
   }
 
-  def calc(s: String, t: String, u2m: DataFrame, m2a: DataFrame, hc: HiveContext) = {
-    val s = "u1"
-    val t = "m2"
+  def calcWsRel(s: String, t: String, u2m: DataFrame, m2a: DataFrame, hc: HiveContext) = {
     // 从《算法思想》文档中WsRel（U1,M2）|R1R2R3) 推导公式的最后一步往上进行计算
     // 先计算[ 1/3【w(M1,a1)*WsRel(a1,M2)+w(M1,a2)*WsRel(a2,M2)+ w(M1,a3)*WsRel(a3,M2)]】+。。。，这里的【】中的和其实就是：
     //    1.	是路径U-M-A-M' 上   M-A的权重的和再乘以M的出度分之一
@@ -53,11 +53,11 @@ object WsRel {
     // 下面计算的是每个movie的出度分之一，即U-M-A-M'路径上，所有M点的出度分之一，目的是为了计算出1/|O(Mi|R2)，即出度分之一
     val m2a_out_degree_1cent = hc.sql("select movie,1.0/count(*) as degree from rans.m2a group by movie")
     // 下面对U-M-A-M'路径上M-A-M'边集合中的M-A边按M分组，每个组内求权重w的和，再乘以对应M的出度分之一，从而求出出度分之一 与 A-Mt边存在的↓↓↓↓↓↓↓↓↓↓↓↓ Start
-    val sum_w = M_A.groupBy(M_A("movie")).sum("weight").withColumnRenamed("sum(weight)","wsum")
+    val sum_w = M_A.groupBy(M_A("movie")).sum("weight").withColumnRenamed("sum(weight)", "wsum")
     // 将sum_w和m2a_out_degree_1cent合并，方便后续的操作
     val tmp_sumw_1cent = sum_w.join(m2a_out_degree_1cent, Seq("movie"), "Left")
     // 下面求出的是出度分之一 乘以 权重和，这里的权重和即路径U-M-A-M' 上 M-A的权重的和，这里的M-A必须存在A-Mt边
-    val WsResl_w_MAMt = tmp_sumw_1cent.select(tmp_sumw_1cent.col("movie"),tmp_sumw_1cent.col("wsum").*(tmp_sumw_1cent.col("degree"))).withColumnRenamed("(wsum * degree)","wma_am")
+    val WsResl_w_MAMt = tmp_sumw_1cent.select(tmp_sumw_1cent.col("movie"), tmp_sumw_1cent.col("wsum").*(tmp_sumw_1cent.col("degree"))).withColumnRenamed("(wsum * degree)", "wma_am")
     // ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑ End
     // ---------------------------
 
@@ -67,19 +67,75 @@ object WsRel {
     // 下面是计算U-M-A-M'的U-M边
     // 先计算M-A-M'种所有的M集合，然后基于M集合和U，来计算有效的U-M集合（有效是指，U-M为s-t的一部分）
     val conMovie = M_A.select("movie").distinct()
-    val conUM = conMovie.join(u2m.filter(u2m("user").equalTo("u1")),Seq("movie"),"Left").select("user","movie","weight")
+    val conUM = conMovie.join(u2m.filter(u2m("user").equalTo("u1")), Seq("movie"), "Left").select("user", "movie", "weight")
 
-    val wu1_s = WsResl_w_MAMt.join(conUM,Seq("movie"),"Left")
-    val result_WsResl = wu1_s.select(wu1_s.col("wma_am").*(wu1_s.col("weight"))).withColumnRenamed("(wma_am * weight)","wmam_w")
-    val result = result_WsResl.select(sum("wmam_w").*(WsRel_um_out_degree))
+    val wu1_s = WsResl_w_MAMt.join(conUM, Seq("movie"), "Left")
+    val result_WsResl = wu1_s.select(wu1_s.col("wma_am").*(wu1_s.col("weight"))).withColumnRenamed("(wma_am * weight)", "wmam_w")
+    val result = result_WsResl.select(sum("wmam_w").*(WsRel_um_out_degree)).first().
   }
+
+  def calcPathWeight(u2m: DataFrame, m2a: DataFrame, m2d: DataFrame, hc: HiveContext) = {
+    // P1=U-(r1)-M-(r2)-A-(r3)-M  P2=U-(r1)-M-(r4)-A-(r5)-M
+
+    // >>>>>>>>> 求S(R1) Start
+    // 求|O(U|R1)|，可以理解为所有u2m边数除以总的user数
+    val our1 = u2m.count.toDouble./(u2m.select("user").distinct().count().toDouble)
+    // 求|I(M|R1)|，可以理解为所有u2m边数除以总的movie数
+    val imr1 = u2m.count.toDouble./(u2m.select("movie").distinct().count().toDouble)
+    val Sr1 = 1.0 / math.sqrt(our1 * imr1)
+    // 求S(R1) end <<<<<<<<<<<<<<<<<<<<<<<
+
+    // >>>>>>>>> 求S(R2) Start
+    // 求|O(U|R2)|，可以理解为所有m2a边数除以总的movie数
+    val our2 = m2a.count.toDouble./(m2a.select("movie").distinct().count().toDouble)
+    // 求|I(M|R2)|，可以理解为所有u2m边数除以总的movie数
+    val imr2 = m2a.count.toDouble./(m2a.select("actor").distinct().count().toDouble)
+    val Sr2 = 1.0 / math.sqrt(our2 * imr2)
+    // 求S(R2) end <<<<<<<<<<<<<<<<<<<<<<<
+
+    // >>>>>>>>> 求S(R3) Start
+    // 求|O(U|R3)|，可以理解为所有m2a边数除以总的actor数
+    val our3 = m2a.count.toDouble./(m2a.select("actor").distinct().count().toDouble)
+    // 求|I(M|R3)|，可以理解为所有m2a边数除以总的movie数
+    val imr3 = m2a.count.toDouble./(m2a.select("movie").distinct().count().toDouble)
+    val Sr3 = 1.0 / math.sqrt(our3 * imr3)
+    // 求S(R3) end <<<<<<<<<<<<<<<<<<<<<<<
+
+    // >>>>>>>>> 求S(R4) Start
+    val our4 = m2d.count.toDouble./(m2d.select("movie").distinct().count().toDouble)
+    val imr4 = m2d.count.toDouble./(m2d.select("director").distinct().count().toDouble)
+    val Sr4 = 1.0 / math.sqrt(our4 * imr4)
+    // 求S(R4) end <<<<<<<<<<<<<<<<<<<<<<<
+
+    // >>>>>>>>> 求S(R5) Start
+    val our5 = m2d.count.toDouble./(m2d.select("director").distinct().count().toDouble)
+    val imr5 = m2d.count.toDouble./(m2d.select("movie").distinct().count().toDouble)
+    val Sr5 = 1.0 / math.sqrt(our5 * imr5)
+    // 求S(R5) end <<<<<<<<<<<<<<<<<<<<<<<
+
+    // 求S(P1)、S(P2)
+    val Sp1 = Sr1 * Sr2 * Sr3
+    val Sp2 = Sr1 * Sr4 * Sr5
+
+    // 求I(P1)、I(P1)
+    val Ip1 = Sp1 / 4.0
+    val Ip2 = Sp2 / 4.0
+
+    // 求两个路径的权重
+    val Wp1 = Ip1 / (Ip1 + Ip2)
+    val Wp2 = Ip2 / (Ip1 + Ip2)
+
+    // scala中最后一行的结果就是返回值
+    (Wp1, Wp2)
+  }
+
 
   /*
     val hc = new org.apache.spark.sql.hive.HiveContext(sc)
     val u2m = hc.sql("select * from rans.u2m")
     val m2a = hc.sql("select * from rans.m2a")
-    val s = "u1"
-    val t = "m2"
+    val s = "61674"
+    val t = "364"
     val movies = u2m.filter(u2m("user").equalTo("u1")).select("movie").distinct()
     val conPathMA = movies.join(m2a, Seq("movie"), "Left")
     val tActors = hc.sql("select distinct actor from rans.m2a where movie = " + "'" + t + "'")
@@ -95,7 +151,8 @@ object WsRel {
     val conUM = conMovie.join(u2m.filter(u2m("user").equalTo("u1")),Seq("movie"),"Left").select("user","movie","weight")
     val wu1_s = WsResl_w_MAMt.join(conUM,Seq("movie"),"Left")
     val result_WsResl = wu1_s.select(wu1_s.col("wma_am").*(wu1_s.col("weight"))).withColumnRenamed("(wma_am * weight)","wmam_w")
-    val result = result_WsResl.select(sum("wmam_w").*(WsRel_um_out_degree))
+    val result = result_WsResl.select(sum("wmam_w").*(WsRel_um_out_degree)).show
+
   */
 }
 

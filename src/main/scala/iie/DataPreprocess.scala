@@ -20,9 +20,11 @@ object DataPreprocess {
     val hc = new org.apache.spark.sql.hive.HiveContext(sc)
     val urm = sc.textFile("hdfs://m02:8020/user/rans/user_ratedmovies.dat").cache()
     val mas = sc.textFile("hdfs://m02:8020/user/rans/movie_actors.dat").cache()
-    processU2M(urm, hc)
-    processM2A(mas)
+    val mds = sc.textFile("hdfs://m02:8020/user/rans/movie_directors.dat").cache()
 
+    processU2M(urm, hc)
+    processM2A(mas, hc)
+    processM2D(mds, hc)
 
   }
 
@@ -58,7 +60,7 @@ object DataPreprocess {
     }
 
     // 定义UtoM类，这个类在RDD转为DataFrame时需要用，Spark需要将该类作为模板，将RDD装为DataFrame
-    case class UtoM(user: String, movie: String, werigth: Double)
+    case class UtoM(user: String, movie: String, weight: Double)
     import hc.implicits._
     // 计算Sigmoid之后，转为DataFrame
     val u2m = u2mTmp.map(x => (x._1, (x._2, x._3))).join(variRDD).map {
@@ -72,16 +74,21 @@ object DataPreprocess {
 
   }
 
-  def processM2A(mas: RDD[String]) {
-    var m2a = mas.map(_.split("\t")).filter(_.length >= 4).map(x => x(0) + "\t" + x(1) + "\t" + x(3))
-    // 如果已经存在结果目录，则删除
-    val outputPath = new Path("hdfs://m02:8020/user/rans/m2a")
-    val hdfs = org.apache.hadoop.fs.FileSystem.get(new java.net.URI("hdfs://m02:8020"), new org.apache.hadoop.conf.Configuration())
-    if (hdfs.exists(outputPath)) hdfs.delete(outputPath, true)
-    // 将结果存储到HDFS指定目录上，注意Spark只能指定存储目录，目录里有两类文件，一个为：_SUCCESS，其余为part-0000*，方法repartition(1)就是将结果写到1个文件里
-    m2a.repartition(1).saveAsTextFile("hdfs://m02:8020/user/rans/m2a")
+  def processM2A(mas: RDD[String], hc: HiveContext) {
+    case class MtoA(movie: String, actor: String, weight: Double)
+    import hc.implicits._
+    var m2a = mas.map(_.split("\t")).filter(_.length >= 4).filter(x => scala.util.Try(x(3).toDouble).isSuccess).map(x => MtoA(x(0), x(1), x(3).toDouble)).toDF("movie", "actor", "weight")
+    m2a.registerTempTable("m2aDF")
+    hc.sql("insert overwrite table rans.m2a select * from m2aDF")
   }
 
+  def processM2D(mds: RDD[String], hc: HiveContext): Unit = {
+    case class MtoD(movie: String, director: String, weight: Double)
+    import hc.implicits._
+    var m2d = mds.filter(x => !x.contains("movieID")).map(_.split("\t")).filter(_.length >= 3).map(x => MtoD(x(0), x(1), 1.0)).toDF("movie", "director", "weight")
+    m2d.registerTempTable("m2dDF")
+    hc.sql("insert overwrite table rans.m2d select * from m2dDF")
+  }
 
 }
 
